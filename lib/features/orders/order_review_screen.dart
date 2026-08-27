@@ -50,8 +50,8 @@ class _OrderReviewScreenState extends ConsumerState<OrderReviewScreen> {
   late final SignatureController _salespersonSigCtrl;
 
   // Track whether controllers have strokes (for button state)
-  bool _customerSigned    = false;
-  bool _salespersonSigned = false;
+  bool _customerSigned    = true;
+  bool _salespersonSigned = true;
 
   @override
   void initState() {
@@ -668,7 +668,7 @@ class _OrderReviewScreenState extends ConsumerState<OrderReviewScreen> {
           const SizedBox(height: 20),
 
           // ── Signatures ─────────────────────────────────────────────────────
-          _buildSignaturesCard(),
+          // _buildSignaturesCard(),
 
           const SizedBox(height: 8),
         ],

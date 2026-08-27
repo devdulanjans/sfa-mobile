@@ -210,10 +210,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     ),
                   ),
                   const SizedBox(height: 20),
-                  const Text('SFA Mobile',
+                  const Text('Iceman',
                     style: TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.w800)),
                   const SizedBox(height: 6),
-                  Text('Sales Force Automation',
+                  Text('Invoice Management App',
                     style: TextStyle(color: Colors.white.withValues(alpha: .7), fontSize: 13)),
                   const SizedBox(height: 40),
 
