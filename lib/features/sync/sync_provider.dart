@@ -44,8 +44,10 @@ class FullSyncStep {
 }
 
 // Roles allowed to pull the Promotions / Batch Pricing catalogs. Sales reps need
-// this data too — they apply promotions/batch pricing while placing orders.
-const _pricingSyncRoles = {'SUPER_ADMIN', 'SALES_MANAGER', 'SALES_REP'};
+// this data too — they apply promotions/batch pricing while placing orders. ADMIN
+// (a channel administrator — see V92__add_admin_role.sql) does everything SALES_MANAGER
+// does within its channel(s), so it belongs here too.
+const _pricingSyncRoles = {'SUPER_ADMIN', 'ADMIN', 'SALES_MANAGER', 'SALES_REP'};
 
 // ── State ─────────────────────────────────────────────────────────────────────
 

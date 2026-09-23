@@ -54,6 +54,8 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
 
   // Distributor-change detection
   String? _lastDistributorId;
+  // Channel-change detection — same pattern as distributor above.
+  String? _lastTenantId;
   bool    _initDone = false;
 
   final _apiFmt     = DateFormat('yyyy-MM-dd');
@@ -159,6 +161,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     if (user != null && !_initDone) {
       _initDone            = true;
       _lastDistributorId   = user.activeDistributorId;
+      _lastTenantId        = user.activeTenantId;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _loadData();
         if (!isSalesRep) _loadSalesReps();
@@ -169,6 +172,14 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     if (user != null && _initDone &&
         user.activeDistributorId != _lastDistributorId) {
       _lastDistributorId = user.activeDistributorId;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _loadData());
+    }
+
+    // Reload on channel switch — same gap as the distributor one above, just for
+    // AuthUser.activeTenantId (set by AuthNotifier.switchChannel).
+    if (user != null && _initDone &&
+        user.activeTenantId != _lastTenantId) {
+      _lastTenantId = user.activeTenantId;
       WidgetsBinding.instance.addPostFrameCallback((_) => _loadData());
     }
 
