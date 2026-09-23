@@ -225,10 +225,18 @@ class _ItemCard extends StatelessWidget {
     final discountPct  = (item['discountPct'] as num?)?.toDouble() ?? 0;
     final taxPct       = (item['taxPct'] as num?)?.toDouble() ?? 0;
     final taxAmount    = (item['taxAmount'] as num?)?.toDouble() ?? 0;
+    final priceSource  = item['priceSource'] as String?;
+    final isFree       = priceSource == 'FREE_PRODUCT';
+    // discountPct is only a *manual* rep-requested discount — a promotion's discount is
+    // baked directly into unitPrice, with discountPct staying 0, so it must be checked
+    // via priceSource too, or a promotion-priced item silently shows no indicator here.
+    final isPromo      = priceSource == 'PROMOTION';
     // Each row shows price × qty (minus any per-item discount) only — tax is an
     // order-level concern shown once in the totals card below, not per line.
-    final lineTotal    = ((item['lineTotal'] as num?)?.toDouble() ?? 0) - taxAmount;
-    final hasDiscount  = discountPct > 0;
+    final lineTotal    = isFree
+        ? unitPrice * quantity
+        : ((item['lineTotal'] as num?)?.toDouble() ?? 0) - taxAmount;
+    final hasDiscount  = discountPct > 0 || isPromo;
     final hasTax       = taxPct > 0;
 
     return Padding(
@@ -240,10 +248,19 @@ class _ItemCard extends StatelessWidget {
           children: [
             Row(children: [
               Expanded(
-                child: Text(
-                  code != null ? '$name  ($code)' : name,
-                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-                ),
+                child: Row(children: [
+                  Flexible(
+                    child: Text(
+                      code != null ? '$name  ($code)' : name,
+                      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  if (isFree) ...[
+                    const SizedBox(width: 6),
+                    const StatusBadge(label: 'FREE', tone: AppTone.mint),
+                  ],
+                ]),
               ),
               Text('LKR ${formatAmount(lineTotal)}',
                   style: const TextStyle(fontWeight: FontWeight.bold)),
@@ -261,7 +278,7 @@ class _ItemCard extends StatelessWidget {
                   if (hasDiscount) ...[
                     const Icon(Icons.local_offer_outlined, size: 11, color: Colors.orange),
                     const SizedBox(width: 2),
-                    Text('${discountPct.toStringAsFixed(0)}%',
+                    Text(isPromo ? 'Promotion' : '${discountPct.toStringAsFixed(0)}%',
                         style: const TextStyle(fontSize: 11, color: Colors.orange)),
                   ],
                   if (hasDiscount && hasTax) const SizedBox(width: 8),

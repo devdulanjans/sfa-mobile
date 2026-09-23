@@ -16,15 +16,16 @@ import 'offline_pricing.dart';
 /// Takes a plain [Dio] (rather than a Riverpod ref) so it works uniformly from
 /// both `WidgetRef` (screens) and `Ref` (notifiers) call sites.
 Future<Map<String, dynamic>> resolvePricing(
-    Dio dio, String productId, String customerId) async {
+    Dio dio, String productId, String customerId, {String? promotionId}) async {
   try {
     final resp = await dio.get('/pricing/resolve', queryParameters: {
       'productId': productId,
       'customerId': customerId,
+      if (promotionId != null) 'promotionId': promotionId,
     });
     return Map<String, dynamic>.from(resp.data as Map);
   } catch (_) {
-    return resolvePriceOffline(productId, customerId);
+    return resolvePriceOffline(productId, customerId, promotionId: promotionId);
   }
 }
 
@@ -104,12 +105,17 @@ class OrderLineItem {
   // re-resolving "the best" batch price, which is ambiguous when several tiers are equally
   // specific (see PricingEngine.resolve on the backend).
   final String? batchPriceId;
+  // The specific Promotion this line's price/free-item eligibility came from, when the rep
+  // explicitly picked one via the promotion picker (more than one was active) — sent to the
+  // backend so it honors exactly that choice, excluding the other promotion, instead of
+  // auto-picking (see PricingEngine.resolve's promotionId javadoc on the backend).
+  final String? promotionId;
 
   const OrderLineItem({
     required this.productId, required this.productName, required this.qty,
     required this.unitPrice, required this.discountPct, required this.taxPct,
     required this.discountAmount, required this.taxAmount, required this.lineTotal,
-    required this.priceSource, this.batchPriceId,
+    required this.priceSource, this.batchPriceId, this.promotionId,
   });
 }
 
@@ -194,6 +200,7 @@ class OrderCreationNotifier extends Notifier<OrderDraft?> {
     double? taxPct,          // supplied when caller already resolved the tax rate
     Map<String, dynamic>? freeProductData, // supplied when caller already resolved pricing
     String? batchPriceId,    // id of the specific tier picked, when unitPrice came from one
+    String? promotionId,     // id of the specific promotion picked, when more than one applied
   }) async {
     if (state == null) return;
 
@@ -204,7 +211,7 @@ class OrderCreationNotifier extends Notifier<OrderDraft?> {
     if (unitPrice == null) {
       // Resolve price live, falling back to the offline cache when unreachable.
       final result = await resolvePricing(
-          ref.read(dioProvider), productId, state!.customerId);
+          ref.read(dioProvider), productId, state!.customerId, promotionId: promotionId);
       resolvedPrice   = (result['unitPrice'] as num).toDouble();
       resolvedSource  = result['priceSource'] as String? ?? 'DEFAULT_PRICE';
       resolvedTaxPct  = (result['taxPct']    as num?)?.toDouble() ?? 0.0;
@@ -224,7 +231,7 @@ class OrderCreationNotifier extends Notifier<OrderDraft?> {
       productId: productId, productName: productName, qty: qty,
       unitPrice: unitPrice0, discountPct: discountPct, taxPct: resolvedTaxPct,
       discountAmount: discountAmount, taxAmount: taxAmount, lineTotal: lineTotal,
-      priceSource: priceSource0, batchPriceId: batchPriceId,
+      priceSource: priceSource0, batchPriceId: batchPriceId, promotionId: promotionId,
     );
 
     state = state!.copyWith(items: [...state!.items, newLine]);
@@ -323,7 +330,7 @@ class OrderCreationNotifier extends Notifier<OrderDraft?> {
       discountPct: old.discountPct, taxPct: old.taxPct,
       discountAmount: discountAmount, taxAmount: taxAmount,
       lineTotal: afterDiscount + taxAmount, priceSource: newSource,
-      batchPriceId: newBatchPriceId,
+      batchPriceId: newBatchPriceId, promotionId: old.promotionId,
     );
     state = state!.copyWith(items: items);
   }
@@ -360,7 +367,7 @@ class OrderCreationNotifier extends Notifier<OrderDraft?> {
           discountPct: i.discountPct, taxPct: i.taxPct,
           discountAmount: discountAmount, taxAmount: taxAmount,
           lineTotal: afterDiscount + taxAmount, priceSource: i.priceSource,
-          batchPriceId: i.batchPriceId,
+          batchPriceId: i.batchPriceId, promotionId: i.promotionId,
         );
       }).toList(),
     );
@@ -414,6 +421,7 @@ class OrderCreationNotifier extends Notifier<OrderDraft?> {
                 'quantity': i.qty,
                 'discountPct': i.discountPct,
                 if (i.batchPriceId != null) 'batchPriceId': i.batchPriceId,
+                if (i.promotionId != null) 'promotionId': i.promotionId,
               }).toList(),
     };
 

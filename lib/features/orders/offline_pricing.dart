@@ -26,6 +26,38 @@ bool hasBatchPricing(String productId, String customerId) {
   });
 }
 
+/// Whether any promotion (percentage/fixed/free-product discount) is currently
+/// active for this product and customer — used by the product list to show a
+/// "Promotion" indicator before the item is even added to cart, mirroring
+/// [hasBatchPricing] above. Mirrors the same filter [resolvePriceOffline] uses
+/// for `activePromotions`, since `/promotions/sync` already flattens any
+/// customer-group targeting into per-member rows before this syncs locally.
+bool hasActivePromotion(String productId, String customerId) {
+  return activePromotionsFor(productId, customerId).isNotEmpty;
+}
+
+/// All promotions currently active for this product+customer, customer-specific ranked
+/// before general — the shared filter behind [hasActivePromotion], [resolvePriceOffline],
+/// and the "choose a promotion" picker (used when more than one is returned and the
+/// `promotion_manual_selection` system setting is on).
+List<Map> activePromotionsFor(String productId, String customerId) {
+  final matches = LocalDb.promotions.where((promo) {
+    if (promo['isActive'] != true) return false;
+    if (!_isActiveRange(promo['startDate'] as String?, promo['endDate'] as String?)) return false;
+    final products = (promo['products'] as List? ?? const []);
+    final matchesProduct = products.any((p) => (p as Map)['id'] == productId);
+    if (!matchesProduct) return false;
+    final c = promo['customer'] as Map?;
+    return c == null || c['id'] == customerId;
+  }).toList();
+  matches.sort((a, b) {
+    final aSpecific = (a['customer'] as Map?)?['id'] == customerId ? 0 : 1;
+    final bSpecific = (b['customer'] as Map?)?['id'] == customerId ? 0 : 1;
+    return aSpecific.compareTo(bSpecific);
+  });
+  return matches;
+}
+
 bool _isActiveRange(String? start, String? end) {
   final today = DateTime.now();
   final s = start != null ? DateTime.tryParse(start) : null;
@@ -40,7 +72,7 @@ bool _isActiveRange(String? start, String? end) {
 /// products/customers/batchPrices/promotions caches and returns the same
 /// shape as `PriceResolveResponse` so callers can treat both paths identically:
 /// `{unitPrice, priceSource, promotionName, maxDiscountAmount, taxPct, freeProduct}`.
-Map<String, dynamic> resolvePriceOffline(String productId, String customerId) {
+Map<String, dynamic> resolvePriceOffline(String productId, String customerId, {String? promotionId}) {
   final product = LocalDb.products.where((p) => p['id'] == productId).firstOrNull;
   final customer = LocalDb.customers.where((c) => c['id'] == customerId).firstOrNull;
 
@@ -64,20 +96,7 @@ Map<String, dynamic> resolvePriceOffline(String productId, String customerId) {
       };
 
   // Active promotions for this product, customer-specific ranked before general.
-  final activePromotions = LocalDb.promotions.where((promo) {
-    if (promo['isActive'] != true) return false;
-    if (!_isActiveRange(promo['startDate'] as String?, promo['endDate'] as String?)) return false;
-    final products = (promo['products'] as List? ?? const []);
-    final matchesProduct = products.any((p) => (p as Map)['id'] == productId);
-    if (!matchesProduct) return false;
-    final c = promo['customer'] as Map?;
-    return c == null || c['id'] == customerId;
-  }).toList()
-    ..sort((a, b) {
-      final aSpecific = (a['customer'] as Map?)?['id'] == customerId ? 0 : 1;
-      final bSpecific = (b['customer'] as Map?)?['id'] == customerId ? 0 : 1;
-      return aSpecific.compareTo(bSpecific);
-    });
+  final activePromotions = activePromotionsFor(productId, customerId);
 
   // A FREE_PRODUCT promotion's eligibility is independent of which price source prices
   // the paid unit below — a product can have both a customer-specific batch price and an
@@ -130,23 +149,39 @@ Map<String, dynamic> resolvePriceOffline(String productId, String customerId) {
     return rows.firstOrNull;
   }
 
-  // 2. Active promotion — first match wins (customer-specific already ranked first above).
+  // 2. Active promotion. An explicit choice (if given and still active) is used verbatim;
+  // otherwise a discount-type promotion (PERCENTAGE/FIXED_AMOUNT) always wins over a
+  // FREE_PRODUCT one — a FREE_PRODUCT promo's own effect is the separate free item above
+  // (freeInfo), so it must never silently suppress an active discount just because it
+  // happened to sort first. Mirrors the backend's PricingEngine.resolve() exactly.
   if (activePromotions.isNotEmpty) {
-    final promo = activePromotions.first;
+    Map? chosen;
+    Map<String, dynamic>? lineFreeInfo = freeInfo;
+    if (promotionId != null) {
+      chosen = activePromotions.where((p) => p['id'] == promotionId).firstOrNull;
+      if (chosen != null) {
+        // An explicit pick is exclusive — choosing the discount promotion means the other
+        // (free-item) promotion's trigger isn't surfaced for this line either.
+        lineFreeInfo = chosen['type'] == 'FREE_PRODUCT' ? freeInfo : null;
+      }
+    }
+    chosen ??= activePromotions.where((p) => p['type'] != 'FREE_PRODUCT').firstOrNull ??
+        activePromotions.first;
+
     final base = (generalBatchRow()?['price'] as num?)?.toDouble() ?? defaultPrice;
-    final type = promo['type'] as String?;
-    final promotionName = promo['name'] as String?;
+    final type = chosen['type'] as String?;
+    final promotionName = chosen['name'] as String?;
 
     if (type == 'FREE_PRODUCT') {
       return result(
         unitPrice: base,
         priceSource: 'PROMOTION',
         promotionName: promotionName,
-        freeProduct: freeInfo,
+        freeProduct: lineFreeInfo,
       );
     }
 
-    final discountValue = (promo['discountValue'] as num?)?.toDouble() ?? 0.0;
+    final discountValue = (chosen['discountValue'] as num?)?.toDouble() ?? 0.0;
     double price = base;
     if (type == 'PERCENTAGE') {
       price = base * (1 - discountValue / 100);
@@ -157,7 +192,7 @@ Map<String, dynamic> resolvePriceOffline(String productId, String customerId) {
       unitPrice: price,
       priceSource: 'PROMOTION',
       promotionName: promotionName,
-      freeProduct: freeInfo,
+      freeProduct: lineFreeInfo,
     );
   }
 
