@@ -193,7 +193,7 @@ class AppShell extends ConsumerWidget {
     switch (i) {
       case 1: context.go('/customers'); break;
       case 2: context.go('/orders');    break;
-      // case 3: context.go('/sync');      break;
+      case 3: context.go('/sync');      break;
       default: context.go('/dashboard');
     }
   }
@@ -227,11 +227,11 @@ class AppShell extends ConsumerWidget {
             icon: Icons.receipt_long_outlined,
             selectedIcon: Icons.receipt_long_rounded,
           ),
-          // AppNavItem(
-          //   icon: Icons.cloud_sync_outlined,
-          //   selectedIcon: Icons.cloud_sync_rounded,
-          //   badgeCount: pendingCount,
-          // ),
+          AppNavItem(
+            icon: Icons.cloud_sync_outlined,
+            selectedIcon: Icons.cloud_sync_rounded,
+            badgeCount: pendingCount,
+          ),
         ],
       ),
     );

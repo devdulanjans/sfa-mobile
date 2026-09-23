@@ -235,10 +235,10 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             ],
 
             // ── Open mileage session indicator ──────────────────────────────
-            // if (mileage.needsEnd) ...[
-            //   _MileageSessionCard(startMileage: mileage.startMileage!),
-            //   const SizedBox(height: 12),
-            // ],
+            if (mileage.needsEnd) ...[
+              _MileageSessionCard(startMileage: mileage.startMileage!),
+              const SizedBox(height: 12),
+            ],
 
             // ── Manager rep picker ─────────────────────────────────────────
             if (!isSalesRep && _repsLoaded) ...[
@@ -271,21 +271,21 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             const SizedBox(height: 16),
 
             // ── Quick Actions ──────────────────────────────────────────────
-            // Row(children: [
-            //   Expanded(child: _QuickActionCard(
-            //     icon: Icons.assignment_return_outlined,
-            //     label: 'New Return',
-            //     tone: AppTone.orange,
-            //     onTap: () => context.push('/returns/new'),
-            //   )),
-            //   const SizedBox(width: 12),
-            //   Expanded(child: _QuickActionCard(
-            //     icon: Icons.report_problem_outlined,
-            //     label: 'Record Damage',
-            //     tone: AppTone.pink,
-            //     onTap: () => context.push('/damages/new'),
-            //   )),
-            // ]),
+            Row(children: [
+              Expanded(child: _QuickActionCard(
+                icon: Icons.assignment_return_outlined,
+                label: 'New Return',
+                tone: AppTone.orange,
+                onTap: () => context.push('/returns/new'),
+              )),
+              const SizedBox(width: 12),
+              Expanded(child: _QuickActionCard(
+                icon: Icons.report_problem_outlined,
+                label: 'Record Damage',
+                tone: AppTone.pink,
+                onTap: () => context.push('/damages/new'),
+              )),
+            ]),
             const SizedBox(height: 16),
 
             // ── Content ────────────────────────────────────────────────────
@@ -443,36 +443,36 @@ class _DashboardBody extends StatelessWidget {
         const SizedBox(height: 24),
 
         // ── Revenue trend chart ───────────────────────────────────────────
-        // const SectionHeader(title: 'Revenue Trend', icon: Icons.show_chart_rounded,
-        //     tone: AppTone.violet),
-        // const SizedBox(height: 10),
-        // // _RevenueTrendCard(daily: daily),
-        // const SizedBox(height: 24),
-        //
-        // // ── Order status pie chart ────────────────────────────────────────
-        // const SectionHeader(title: 'Order Status', icon: Icons.donut_large_rounded,
-        //     tone: AppTone.orange),
-        // const SizedBox(height: 10),
-        // _StatusPieCard(statusMap: statusMap),
-        // const SizedBox(height: 24),
+        const SectionHeader(title: 'Revenue Trend', icon: Icons.show_chart_rounded,
+            tone: AppTone.violet),
+        const SizedBox(height: 10),
+        _RevenueTrendCard(daily: daily),
+        const SizedBox(height: 24),
+
+        // ── Order status pie chart ────────────────────────────────────────
+        const SectionHeader(title: 'Order Status', icon: Icons.donut_large_rounded,
+            tone: AppTone.orange),
+        const SizedBox(height: 10),
+        _StatusPieCard(statusMap: statusMap),
+        const SizedBox(height: 24),
 
         // ── Top customers ─────────────────────────────────────────────────
-        // if (topCustomers.isNotEmpty) ...[
-        //   const SectionHeader(title: 'Top Customers', icon: Icons.emoji_events_outlined,
-        //       tone: AppTone.mint),
-        //   const SizedBox(height: 10),
-        //   _TopCustomersCard(customers: topCustomers),
-        //   const SizedBox(height: 24),
-        // ],
-        //
-        // // ── Recent orders ─────────────────────────────────────────────────
-        // if (recentOrders.isNotEmpty) ...[
-        //   const SectionHeader(title: 'Recent Orders', icon: Icons.receipt_long_outlined,
-        //       tone: AppTone.sky),
-        //   const SizedBox(height: 10),
-        //   _RecentOrdersCard(orders: recentOrders),
-        //   const SizedBox(height: 16),
-        // ],
+        if (topCustomers.isNotEmpty) ...[
+          const SectionHeader(title: 'Top Customers', icon: Icons.emoji_events_outlined,
+              tone: AppTone.mint),
+          const SizedBox(height: 10),
+          _TopCustomersCard(customers: topCustomers),
+          const SizedBox(height: 24),
+        ],
+
+        // ── Recent orders ─────────────────────────────────────────────────
+        if (recentOrders.isNotEmpty) ...[
+          const SectionHeader(title: 'Recent Orders', icon: Icons.receipt_long_outlined,
+              tone: AppTone.sky),
+          const SizedBox(height: 10),
+          _RecentOrdersCard(orders: recentOrders),
+          const SizedBox(height: 16),
+        ],
       ],
     );
   }
