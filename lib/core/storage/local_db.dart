@@ -78,9 +78,10 @@ class LocalDb {
     }
   }
 
-  // Call on login to force a full customer re-sync for the new user session
+  // Call on login to force a full customer/product re-sync for the new user session
   static Future<void> clearCustomerCache() async {
     await customersBox.clear();
+    await productsBox.clear();
     await settingsBox.delete('last_sync_at');
   }
 

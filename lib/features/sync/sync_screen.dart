@@ -317,7 +317,7 @@ class _DataSyncCard extends StatelessWidget {
           // Info text
           const Text(
             'Sync Changes pulls only records updated since the last sync. '
-            'Full Refresh calls every data API individually — customers, '
+            'Full Refresh calls every data API individually — channels, customers, '
             'products, orders, invoices, pricing, promotions & batch pricing — '
             'and shows live progress for each.',
             style: TextStyle(fontSize: 12, color: Colors.grey, height: 1.4),

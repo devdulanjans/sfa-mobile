@@ -3,9 +3,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../shared/widgets/app_bottom_nav.dart';
+import '../shared/widgets/channel_banner.dart';
 import '../features/auth/login_screen.dart';
 import '../features/auth/auth_provider.dart';
 import '../features/auth/distributor_selector_screen.dart';
+import '../features/auth/channel_selector_screen.dart';
 import '../features/mileage/mileage_provider.dart';
 import '../features/mileage/start_mileage_screen.dart';
 import '../features/dashboard/dashboard_screen.dart';
@@ -50,19 +52,30 @@ final routerProvider = Provider<GoRouter>((ref) {
 
       if (!loggedIn && loc != '/login') return '/login';
       if (loggedIn  && loc == '/login') {
+        if (user.tenants.length > 1 && user.activeTenantId == null) {
+          return '/select-channel';
+        }
         if (user.distributors.length > 1 && user.activeDistributorId == null) {
           return '/select-distributor';
         }
         return '/dashboard';
       }
 
+      // Mandatory channel-selection gate (multi-channel users only) — a channel
+      // must be picked before any tenant-scoped endpoint (customers, products)
+      // will serve data, so this is enforced app-wide, not just right after login.
+      if (loggedIn && loc != '/select-channel' &&
+          user.tenants.length > 1 && user.activeTenantId == null) {
+        return '/select-channel';
+      }
+
       // Mandatory start-mileage gate (SALES_REP only) — required at the start of
       // every session (a rep who logged out after recording end mileage must
       // enter start mileage again on their next login, even the same day).
-      // Skipped while still resolving the distributor picker so a
-      // multi-distributor user isn't asked for both at once — once they pick a
-      // distributor and navigate away, this re-evaluates for the new location.
-      if (loggedIn && loc != '/select-distributor' && loc != '/start-mileage') {
+      // Skipped while still resolving the channel/distributor picker so a
+      // multi-channel or multi-distributor user isn't asked for everything at
+      // once — once they pick and navigate away, this re-evaluates for the new location.
+      if (loggedIn && loc != '/select-channel' && loc != '/select-distributor' && loc != '/start-mileage') {
         final mileage = ref.read(mileageNotifierProvider);
         if (!mileage.isLoading && (mileage.valueOrNull?.needsStart ?? false)) {
           return '/start-mileage';
@@ -77,6 +90,12 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/select-distributor',
         builder: (c, s) => DistributorSelectorScreen(
+          isSwitch: s.uri.queryParameters['switch'] == 'true',
+        ),
+      ),
+      GoRoute(
+        path: '/select-channel',
+        builder: (c, s) => ChannelSelectorScreen(
           isSwitch: s.uri.queryParameters['switch'] == 'true',
         ),
       ),
@@ -174,7 +193,7 @@ class AppShell extends ConsumerWidget {
     switch (i) {
       case 1: context.go('/customers'); break;
       case 2: context.go('/orders');    break;
-      case 3: context.go('/sync');      break;
+      // case 3: context.go('/sync');      break;
       default: context.go('/dashboard');
     }
   }
@@ -185,7 +204,13 @@ class AppShell extends ConsumerWidget {
     final pendingCount = syncState.pendingOrderCount;
 
     return Scaffold(
-      body: child,
+      body: SafeArea(
+        bottom: false,
+        child: Column(children: [
+          const ChannelBanner(),
+          Expanded(child: child),
+        ]),
+      ),
       bottomNavigationBar: AppBottomNav(
         selectedIndex: _index,
         onTap: (i) => _onTap(context, i),
@@ -202,11 +227,11 @@ class AppShell extends ConsumerWidget {
             icon: Icons.receipt_long_outlined,
             selectedIcon: Icons.receipt_long_rounded,
           ),
-          AppNavItem(
-            icon: Icons.cloud_sync_outlined,
-            selectedIcon: Icons.cloud_sync_rounded,
-            badgeCount: pendingCount,
-          ),
+          // AppNavItem(
+          //   icon: Icons.cloud_sync_outlined,
+          //   selectedIcon: Icons.cloud_sync_rounded,
+          //   badgeCount: pendingCount,
+          // ),
         ],
       ),
     );

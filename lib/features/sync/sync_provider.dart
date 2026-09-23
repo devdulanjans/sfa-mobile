@@ -217,6 +217,9 @@ class SyncNotifier extends Notifier<SyncState> {
     if (state.isSyncing) return;
     state = state.copyWith(isSyncing: true, syncMessage: null);
     try {
+      // Best-effort — picks up channel membership changes (added/removed by an
+      // admin) without requiring a fresh login; doesn't affect the outcome below.
+      await ref.read(authNotifierProvider.notifier).refreshChannels();
       final result = await ref.read(syncServiceProvider).sync(force: force);
       final msg = force
           ? 'Full refresh complete — all data updated'
@@ -263,6 +266,7 @@ class SyncNotifier extends Notifier<SyncState> {
     final canPullPricing = _pricingSyncRoles.contains(role);
 
     final steps = <FullSyncStep>[
+      const FullSyncStep(key: 'channels',   label: 'Channels'),
       const FullSyncStep(key: 'customers', label: 'Customers'),
       const FullSyncStep(key: 'products',  label: 'Products'),
       const FullSyncStep(key: 'orders',    label: 'Orders (last 90 days)'),
@@ -303,6 +307,13 @@ class SyncNotifier extends Notifier<SyncState> {
         _updateFullSyncStep(key, status: FullSyncStatus.failed, error: detail);
       }
     }
+
+    await runStep('channels', 'Channels', () async {
+      final authNotifier = ref.read(authNotifierProvider.notifier);
+      final before = ref.read(authNotifierProvider).valueOrNull?.tenants.length ?? 0;
+      await authNotifier.refreshChannels();
+      return ref.read(authNotifierProvider).valueOrNull?.tenants.length ?? before;
+    });
 
     await runStep('customers', 'Customers', () async {
       final items = await _fetchAllPages(dio, '/customers', pageSize: 200, maxPages: 50);

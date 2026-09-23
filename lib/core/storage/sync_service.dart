@@ -84,7 +84,11 @@ class SyncService {
       if (data['products'] != null) {
         final list = List<Map>.from(data['products'] as List);
         pCount = list.length;
-        await LocalDb.mergeProducts(list);
+        if (since == null) {
+          await LocalDb.replaceProducts(list);
+        } else {
+          await LocalDb.mergeProducts(list);
+        }
       }
 
       await LocalDb.setLastSyncAt(DateTime.now().toUtc());
