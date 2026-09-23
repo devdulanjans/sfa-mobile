@@ -1,7 +1,6 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../app/colors.dart';
 import '../../app/radii.dart';
 import '../../core/network/api_client.dart';
 import 'auth_provider.dart';
@@ -180,10 +179,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     return Scaffold(
       body: Container(
         decoration: const BoxDecoration(
+          // Light wash sampled from the logo's teal-to-navy gradient mark.
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
-            colors: [AppColors.violetFg, Color(0xFF4A3499)],
+            colors: [Color(0xFFEEFBF9), Color(0xFFD7F2EE)],
           ),
         ),
         child: SafeArea(
@@ -201,7 +201,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       decoration: BoxDecoration(
                         color: Colors.white,
                         borderRadius: BorderRadius.circular(AppRadius.xl),
-                        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 16, offset: Offset(0, 6))],
+                        boxShadow: const [BoxShadow(color: Color(0x592E9690), blurRadius: 16, offset: Offset(0, 6))],
                       ),
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(AppRadius.xl),
@@ -210,11 +210,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     ),
                   ),
                   const SizedBox(height: 20),
-                  const Text('Iceman',
-                    style: TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.w800)),
+                  const Text('AVLIS',
+                    style: TextStyle(color: Color(0xFF1E4D6B), fontSize: 26, fontWeight: FontWeight.w800)),
                   const SizedBox(height: 6),
-                  Text('Invoice Management App',
-                    style: TextStyle(color: Colors.white.withValues(alpha: .7), fontSize: 13)),
+                  const Text('ERP management',
+                    style: TextStyle(color: Color(0xFF237A7D), fontSize: 13)),
                   const SizedBox(height: 40),
 
                   // Form card

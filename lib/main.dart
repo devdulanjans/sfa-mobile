@@ -20,7 +20,7 @@ class SfaApp extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final router = ref.watch(routerProvider);
     return MaterialApp.router(
-      title: 'Iceman Invoice',
+      title: 'Avlis ERP',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),
       routerConfig: router,

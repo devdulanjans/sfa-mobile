@@ -35,11 +35,13 @@ class AppBottomNav extends StatelessWidget {
         height: 64,
         padding: const EdgeInsets.symmetric(horizontal: 8),
         decoration: BoxDecoration(
-          color: AppColors.ink,
+          // Same brand teal used for primary buttons/active states across
+          // the admin sidebar and mobile buttons (see AppTheme.light).
+          color: const Color(0xFF237A7D),
           borderRadius: BorderRadius.circular(AppRadius.pill),
           boxShadow: [
             BoxShadow(
-              color: AppColors.ink.withValues(alpha: 0.25),
+              color: const Color(0xFF237A7D).withValues(alpha: 0.35),
               blurRadius: 16,
               offset: const Offset(0, 6),
             ),
@@ -83,12 +85,14 @@ class _NavIcon extends StatelessWidget {
             width: 44,
             height: 44,
             decoration: BoxDecoration(
-              color: selected ? Colors.white : Colors.transparent,
+              // Subtle highlight for the selected tab now that the bar itself
+              // is the same brand teal — a solid circle would be invisible.
+              color: selected ? Colors.white.withValues(alpha: 0.22) : Colors.transparent,
               shape: BoxShape.circle,
             ),
             child: Icon(
               selected ? item.selectedIcon : item.icon,
-              color: selected ? AppColors.ink : Colors.white70,
+              color: Colors.white,
               size: 22,
             ),
           ),

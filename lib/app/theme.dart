@@ -5,7 +5,8 @@ import 'radii.dart';
 
 class AppTheme {
   static ThemeData light() {
-    const primary = Color(0xFF2563EB);
+    // Sampled from the logo's teal-to-navy gradient mark (assets/icon/app_icon.png).
+    const primary = Color(0xFF237A7D);
     const surface = AppColors.scaffoldBg;
 
     return ThemeData(
@@ -65,7 +66,7 @@ class AppTheme {
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
-          backgroundColor: Colors.black,
+          backgroundColor: primary,
           foregroundColor: Colors.white,
           elevation: 0,
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
@@ -78,7 +79,7 @@ class AppTheme {
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
-          backgroundColor: Colors.black,
+          backgroundColor: primary,
           foregroundColor: Colors.white,
           elevation: 0,
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),

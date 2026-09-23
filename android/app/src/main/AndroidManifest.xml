@@ -6,7 +6,7 @@
          different attributes (e.g. maxSdkVersion) would conflict with the
          plugin's during Gradle manifest merging. -->
     <application
-        android:label="Iceman - SFA"
+        android:label="Avlis ERP"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
