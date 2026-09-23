@@ -52,6 +52,15 @@ class SyncService {
         _ref.invalidate(mileageNotifierProvider);
       } catch (_) {}
 
+      // 2b. Pull Damage/Return reasons (small, admin-managed list) — kept fresh
+      // every sync so an admin-added/removed reason shows up on the next login
+      // or background sync, not only after a manual Full Sync.
+      try {
+        final reasonsResp = await dio.get('/reasons');
+        final reasonsList = List<Map<String, dynamic>>.from(reasonsResp.data as List);
+        await LocalDb.replaceReasons(reasonsList);
+      } catch (_) {}
+
       // 3. Pull delta (or full snapshot when force=true or first login)
       final since = force ? null : LocalDb.lastSyncAt;
       final params = since != null

@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
 import '../../app/colors.dart';
 import '../../app/radii.dart';
+import '../../core/bluetooth/thermal_print_flow.dart';
 import '../../core/storage/local_db.dart';
 import '../../shared/widgets/app_card.dart';
 import '../../shared/widgets/empty_state.dart';
@@ -10,7 +12,9 @@ import '../../shared/widgets/section_header.dart';
 import '../../shared/widgets/stat_tile.dart';
 import '../../shared/widgets/status_badge.dart';
 import '../../utils/formatters.dart';
+import '../damages/damage_print_preview_screen.dart';
 import '../orders/order_provider.dart';
+import '../returns/return_print_preview_screen.dart';
 import 'customer_analytics_provider.dart';
 
 const _orderStatusTones = {
@@ -472,13 +476,62 @@ class _ReturnsTab extends ConsumerWidget {
   }
 }
 
-class _ReturnCard extends StatelessWidget {
+class _ReturnCard extends ConsumerStatefulWidget {
   final Map<String, dynamic> ret;
   const _ReturnCard({required this.ret});
 
   @override
+  ConsumerState<_ReturnCard> createState() => _ReturnCardState();
+}
+
+class _ReturnCardState extends ConsumerState<_ReturnCard> {
+  BluetoothInfo? _printer;
+  bool _printing = false;
+
+  Map<String, dynamic> get ret => widget.ret;
+
+  // Mirrors ReturnFormScreen's post-submit print flow (see
+  // _printOrPreview/_openPrintPreview/_printNote there) so a return note can
+  // be reprinted later from the customer's Returns tab the same way it's
+  // printed right after the return is placed.
+  Future<void> _reprint(String id, String returnNumber) async {
+    setState(() => _printing = true);
+    try {
+      final previewEnabled = LocalDb.getSystemSettingBool(
+          'invoice_print_preview_enabled', defaultValue: false);
+      if (previewEnabled) {
+        await Navigator.push(context, MaterialPageRoute(
+          builder: (_) => ReturnPrintPreviewScreen(
+            returnId: id,
+            returnNumber: returnNumber,
+            onPrint: () async {
+              await _print(id);
+              if (mounted) Navigator.pop(context);
+            },
+          ),
+        ));
+      } else {
+        await _print(id);
+      }
+    } finally {
+      if (mounted) setState(() => _printing = false);
+    }
+  }
+
+  Future<void> _print(String id) async {
+    final printer = await printThermalReceipt(
+      context: context,
+      ref: ref,
+      path: '/returns/$id/thermal',
+      printer: _printer,
+    );
+    if (printer != null) _printer = printer;
+  }
+
+  @override
   Widget build(BuildContext context) {
     final status       = ret['status'] as String? ?? '';
+    final returnId     = ret['id'] as String?;
     final returnNumber = ret['returnNumber'] as String? ?? '';
     final orderNumber  = (ret['order'] as Map?)?['orderNumber'] as String?;
     final reason       = ret['reason'] as String? ?? '';
@@ -525,6 +578,25 @@ class _ReturnCard extends StatelessWidget {
           const SizedBox(height: 8),
           Text('Reason: $reason',
               style: const TextStyle(fontSize: 12, color: Colors.black54)),
+        ],
+        if (returnId != null) ...[
+          const SizedBox(height: 10),
+          Align(
+            alignment: Alignment.centerRight,
+            child: OutlinedButton.icon(
+              onPressed: _printing ? null : () => _reprint(returnId, returnNumber),
+              icon: _printing
+                  ? const SizedBox(height: 14, width: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.print_outlined, size: 16),
+              label: Text(_printing ? 'Printing…' : 'Reprint',
+                  style: const TextStyle(fontSize: 13)),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                visualDensity: VisualDensity.compact,
+              ),
+            ),
+          ),
         ],
       ]),
     );
@@ -585,13 +657,62 @@ class _DamagesTab extends ConsumerWidget {
   }
 }
 
-class _DamageCard extends StatelessWidget {
+class _DamageCard extends ConsumerStatefulWidget {
   final Map<String, dynamic> damage;
   const _DamageCard({required this.damage});
 
   @override
+  ConsumerState<_DamageCard> createState() => _DamageCardState();
+}
+
+class _DamageCardState extends ConsumerState<_DamageCard> {
+  BluetoothInfo? _printer;
+  bool _printing = false;
+
+  Map<String, dynamic> get damage => widget.damage;
+
+  // Mirrors DamageFormScreen's post-submit print flow (see
+  // _printOrPreview/_openPrintPreview/_printNote there) so a damage note can
+  // be reprinted later from the customer's Damages tab the same way it's
+  // printed right after the damage is recorded.
+  Future<void> _reprint(String id, String damageNumber) async {
+    setState(() => _printing = true);
+    try {
+      final previewEnabled = LocalDb.getSystemSettingBool(
+          'invoice_print_preview_enabled', defaultValue: false);
+      if (previewEnabled) {
+        await Navigator.push(context, MaterialPageRoute(
+          builder: (_) => DamagePrintPreviewScreen(
+            damageId: id,
+            damageNumber: damageNumber,
+            onPrint: () async {
+              await _print(id);
+              if (mounted) Navigator.pop(context);
+            },
+          ),
+        ));
+      } else {
+        await _print(id);
+      }
+    } finally {
+      if (mounted) setState(() => _printing = false);
+    }
+  }
+
+  Future<void> _print(String id) async {
+    final printer = await printThermalReceipt(
+      context: context,
+      ref: ref,
+      path: '/damages/$id/thermal',
+      printer: _printer,
+    );
+    if (printer != null) _printer = printer;
+  }
+
+  @override
   Widget build(BuildContext context) {
     final status       = damage['status'] as String? ?? '';
+    final damageId     = damage['id'] as String?;
     final damageNumber = damage['damageNumber'] as String? ?? '';
     final description  = damage['description'] as String? ?? '';
     final items        = (damage['items'] as List? ?? []).cast<Map>();
@@ -633,6 +754,25 @@ class _DamageCard extends StatelessWidget {
           const SizedBox(height: 8),
           Text('Description: $description',
               style: const TextStyle(fontSize: 12, color: Colors.black54)),
+        ],
+        if (damageId != null) ...[
+          const SizedBox(height: 10),
+          Align(
+            alignment: Alignment.centerRight,
+            child: OutlinedButton.icon(
+              onPressed: _printing ? null : () => _reprint(damageId, damageNumber),
+              icon: _printing
+                  ? const SizedBox(height: 14, width: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.print_outlined, size: 16),
+              label: Text(_printing ? 'Printing…' : 'Reprint',
+                  style: const TextStyle(fontSize: 13)),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                visualDensity: VisualDensity.compact,
+              ),
+            ),
+          ),
         ],
       ]),
     );

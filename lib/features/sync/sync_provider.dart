@@ -390,6 +390,11 @@ class SyncNotifier extends Notifier<SyncState> {
         await LocalDb.setSystemSetting(s['key'] as String, s['value'] as String);
       }
       ref.invalidate(mileageNotifierProvider);
+
+      final reasonsResp = await dio.get('/reasons');
+      final reasons = List<Map<String, dynamic>>.from(reasonsResp.data as List);
+      await LocalDb.replaceReasons(reasons);
+
       return items.length;
     });
 

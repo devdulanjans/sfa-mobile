@@ -99,12 +99,17 @@ class OrderLineItem {
   final double taxAmount;
   final double lineTotal;
   final String priceSource;
+  // The specific BatchPrice row id this line's price came from, when picked via the price-tier
+  // sheet — sent to the backend so it charges exactly this tier instead of independently
+  // re-resolving "the best" batch price, which is ambiguous when several tiers are equally
+  // specific (see PricingEngine.resolve on the backend).
+  final String? batchPriceId;
 
   const OrderLineItem({
     required this.productId, required this.productName, required this.qty,
     required this.unitPrice, required this.discountPct, required this.taxPct,
     required this.discountAmount, required this.taxAmount, required this.lineTotal,
-    required this.priceSource,
+    required this.priceSource, this.batchPriceId,
   });
 }
 
@@ -188,6 +193,7 @@ class OrderCreationNotifier extends Notifier<OrderDraft?> {
     String? priceSource,
     double? taxPct,          // supplied when caller already resolved the tax rate
     Map<String, dynamic>? freeProductData, // supplied when caller already resolved pricing
+    String? batchPriceId,    // id of the specific tier picked, when unitPrice came from one
   }) async {
     if (state == null) return;
 
@@ -218,7 +224,7 @@ class OrderCreationNotifier extends Notifier<OrderDraft?> {
       productId: productId, productName: productName, qty: qty,
       unitPrice: unitPrice0, discountPct: discountPct, taxPct: resolvedTaxPct,
       discountAmount: discountAmount, taxAmount: taxAmount, lineTotal: lineTotal,
-      priceSource: priceSource0,
+      priceSource: priceSource0, batchPriceId: batchPriceId,
     );
 
     state = state!.copyWith(items: [...state!.items, newLine]);
@@ -301,7 +307,8 @@ class OrderCreationNotifier extends Notifier<OrderDraft?> {
 
   void clearOrder() => state = null;
 
-  void replaceLine(int index, double newUnitPrice, double newQty, String newSource) {
+  void replaceLine(int index, double newUnitPrice, double newQty, String newSource,
+      [String? newBatchPriceId]) {
     if (state == null) return;
     final items = [...state!.items];
     if (index < 0 || index >= items.length) return;
@@ -316,6 +323,7 @@ class OrderCreationNotifier extends Notifier<OrderDraft?> {
       discountPct: old.discountPct, taxPct: old.taxPct,
       discountAmount: discountAmount, taxAmount: taxAmount,
       lineTotal: afterDiscount + taxAmount, priceSource: newSource,
+      batchPriceId: newBatchPriceId,
     );
     state = state!.copyWith(items: items);
   }
@@ -352,6 +360,7 @@ class OrderCreationNotifier extends Notifier<OrderDraft?> {
           discountPct: i.discountPct, taxPct: i.taxPct,
           discountAmount: discountAmount, taxAmount: taxAmount,
           lineTotal: afterDiscount + taxAmount, priceSource: i.priceSource,
+          batchPriceId: i.batchPriceId,
         );
       }).toList(),
     );
@@ -404,6 +413,7 @@ class OrderCreationNotifier extends Notifier<OrderDraft?> {
                 'productId': i.productId,
                 'quantity': i.qty,
                 'discountPct': i.discountPct,
+                if (i.batchPriceId != null) 'batchPriceId': i.batchPriceId,
               }).toList(),
     };
 

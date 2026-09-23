@@ -143,9 +143,9 @@ class _OrderReviewScreenState extends ConsumerState<OrderReviewScreen> {
           initialQty: item.qty,
           initialPrice: item.unitPrice,
           confirmLabel: 'Update',
-          onConfirm: (price, qty, source) async {
+          onConfirm: (price, qty, source, batchPriceId) async {
             ref.read(orderCreationProvider.notifier)
-                .replaceLine(index, price, qty, source);
+                .replaceLine(index, price, qty, source, batchPriceId);
           },
         ),
       );
@@ -185,6 +185,11 @@ class _OrderReviewScreenState extends ConsumerState<OrderReviewScreen> {
       _snack('Sales person signature is required', AppColors.orangeFg);
       return;
     }
+
+    final draft = ref.read(orderCreationProvider);
+    if (draft == null) return;
+    final confirmed = await _showOrderSummaryDialog(draft);
+    if (!mounted || confirmed != true) return;
 
     setState(() => _submitting = true);
 
@@ -238,6 +243,278 @@ class _OrderReviewScreenState extends ConsumerState<OrderReviewScreen> {
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
+  }
+
+  // ── Order summary confirmation ─────────────────────────────────────────────
+
+  // Shown after the rep taps "Submit Order" but before the order is actually
+  // created — a last look at customer/delivery/items/promotions/totals so a
+  // mis-tapped qty or tier change doesn't go straight to the backend unnoticed.
+  Future<bool?> _showOrderSummaryDialog(OrderDraft draft) {
+    final taxedItem = draft.items.where((i) => i.taxPct > 0).firstOrNull;
+    final customer = LocalDb.customers
+        .where((c) => c['id'] == draft.customerId)
+        .firstOrNull;
+    final customerCode  = customer?['code']       as String?;
+    final customerPhone = customer?['phone']       as String?;
+    final creditDays    = (customer?['creditDays'] as num?)?.toInt();
+
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => Dialog(
+        insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 32),
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(AppRadius.xl)),
+        clipBehavior: Clip.antiAlias,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: 420,
+            maxHeight: MediaQuery.of(ctx).size.height * 0.85,
+          ),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            // ── Header ───────────────────────────────────────────────────────
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [AppColors.violetFg, Color(0xFF8B6EF0)],
+                ),
+              ),
+              child: Row(children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.18),
+                    borderRadius: BorderRadius.circular(AppRadius.md),
+                  ),
+                  child: const Icon(Icons.receipt_long_rounded,
+                      color: Colors.white, size: 22),
+                ),
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Order Summary',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 17,
+                              fontWeight: FontWeight.bold)),
+                      SizedBox(height: 2),
+                      Text('Please review before confirming',
+                          style: TextStyle(
+                              color: Colors.white70, fontSize: 12)),
+                    ],
+                  ),
+                ),
+              ]),
+            ),
+
+            // ── Scrollable body ─────────────────────────────────────────────
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // ── Customer ───────────────────────────────────────────
+                    AppCard(
+                      tone: AppTone.violet,
+                      padding: const EdgeInsets.all(14),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const SectionHeader(
+                              title: 'Customer', icon: Icons.person_outline),
+                          const SizedBox(height: 10),
+                          Text(draft.customerName,
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 16,
+                                  color: AppColors.violetFg)),
+                          if (customerCode != null && customerCode.isNotEmpty ||
+                              (customerPhone != null && customerPhone.isNotEmpty) ||
+                              creditDays != null) ...[
+                            const SizedBox(height: 6),
+                            Wrap(spacing: 14, runSpacing: 4, children: [
+                              if (customerCode != null && customerCode.isNotEmpty)
+                                _MetaChip(Icons.badge_outlined, customerCode),
+                              if (customerPhone != null && customerPhone.isNotEmpty)
+                                _MetaChip(Icons.phone_outlined, customerPhone),
+                              if (creditDays != null)
+                                _MetaChip(Icons.calendar_month_outlined,
+                                    '$creditDays credit days'),
+                            ]),
+                          ],
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+
+                    // ── Delivery address ─────────────────────────────────────
+                    if (_deliveryAddressLine != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: AppCard(
+                          padding: const EdgeInsets.all(14),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const SectionHeader(
+                                  title: 'Delivery Address',
+                                  icon: Icons.local_shipping_outlined,
+                                  tone: AppTone.sky),
+                              const SizedBox(height: 8),
+                              if (_deliveryAddressLabel != null &&
+                                  _deliveryAddressLabel!.isNotEmpty)
+                                Text(_deliveryAddressLabel!,
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 13)),
+                              Text(_deliveryAddressLine!,
+                                  style: TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.grey.shade700)),
+                            ],
+                          ),
+                        ),
+                      ),
+
+                    // ── Items ─────────────────────────────────────────────────
+                    AppCard(
+                      padding: const EdgeInsets.all(14),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          SectionHeader(
+                              title: 'Items (${draft.items.length})',
+                              icon: Icons.shopping_bag_outlined),
+                          const SizedBox(height: 10),
+                          ...draft.items.map((item) {
+                            final isFree = item.priceSource == 'FREE_PRODUCT';
+                            final hasPromo = item.discountPct > 0 || isFree;
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 10),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Row(children: [
+                                          Flexible(
+                                            child: Text(item.productName,
+                                                style: const TextStyle(
+                                                    fontWeight:
+                                                        FontWeight.w600,
+                                                    fontSize: 13)),
+                                          ),
+                                          if (isFree) ...[
+                                            const SizedBox(width: 6),
+                                            const StatusBadge(
+                                                label: 'FREE',
+                                                tone: AppTone.mint),
+                                          ] else if (hasPromo) ...[
+                                            const SizedBox(width: 6),
+                                            StatusBadge(
+                                                label:
+                                                    '${item.discountPct.toStringAsFixed(0)}% OFF',
+                                                tone: AppTone.orange),
+                                          ],
+                                        ]),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          '${item.qty.toStringAsFixed(item.qty % 1 == 0 ? 0 : 2)} × LKR ${formatAmount(item.unitPrice)}',
+                                          style: TextStyle(
+                                              fontSize: 11,
+                                              color: Colors.grey.shade700),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  Text(
+                                      'LKR ${formatAmount(isFree ? item.unitPrice * item.qty : item.lineTotal - item.taxAmount)}',
+                                      style: const TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 13)),
+                                ],
+                              ),
+                            );
+                          }),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+
+                    // ── Totals ───────────────────────────────────────────────
+                    AppCard(
+                      tone: AppTone.violet,
+                      padding: const EdgeInsets.all(14),
+                      child: Column(children: [
+                        _Total(
+                            draft.discountTotal > 0 ? 'Full Total' : 'Subtotal',
+                            'LKR ${formatAmount(draft.grossTotal)}', false),
+                        if (draft.discountTotal > 0) ...[
+                          _Total('Discount',
+                              'LKR ${formatAmount(-draft.discountTotal)}',
+                              false,
+                              color: AppColors.mintFg),
+                          _Total('Net Amount',
+                              'LKR ${formatAmount(draft.subtotal)}', false),
+                        ],
+                        if (draft.taxTotal > 0)
+                          _Total(
+                              taxedItem != null
+                                  ? 'Tax (${taxedItem.taxPct.toStringAsFixed(0)}%)'
+                                  : 'Tax',
+                              'LKR ${formatAmount(draft.taxTotal)}', false,
+                              color: AppColors.skyFg),
+                        const Divider(height: 16),
+                        _Total('TOTAL',
+                            'LKR ${formatAmount(draft.grandTotal)}', true,
+                            color: AppColors.violetFg),
+                      ]),
+                    ),
+                    const SizedBox(height: 4),
+                  ],
+                ),
+              ),
+            ),
+
+            // ── Actions ──────────────────────────────────────────────────────
+            Container(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                border: Border(top: BorderSide(color: Colors.grey.shade200)),
+              ),
+              child: Row(children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.pop(ctx, false),
+                    child: const Text('Back'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  flex: 2,
+                  child: FilledButton.icon(
+                    onPressed: () => Navigator.pop(ctx, true),
+                    icon: const Icon(Icons.check_circle_outline, size: 18),
+                    label: const Text('Confirm Order'),
+                  ),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+      ),
+    );
   }
 
   void _snack(String msg, Color color) {
@@ -972,5 +1249,23 @@ class _Total extends StatelessWidget {
                   fontSize: bold ? 15 : 13,
                   color: color)),
         ]),
+      );
+}
+
+// Small icon+text pill used for compact customer metadata (code/phone/credit
+// days) in the order summary dialog.
+class _MetaChip extends StatelessWidget {
+  final IconData icon;
+  final String text;
+  const _MetaChip(this.icon, this.text);
+  @override
+  Widget build(BuildContext context) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: Colors.grey.shade700),
+          const SizedBox(width: 4),
+          Text(text,
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade700)),
+        ],
       );
 }

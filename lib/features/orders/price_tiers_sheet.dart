@@ -7,7 +7,7 @@ class PriceTiersSheet extends StatefulWidget {
   final String productName;
   final String unit;
   final List<Map<String, dynamic>> tiers;
-  final Future<void> Function(double price, double qty, String priceSource) onConfirm;
+  final Future<void> Function(double price, double qty, String priceSource, String? batchPriceId) onConfirm;
   final double? initialQty;    // pre-fill qty (update flow)
   final double? initialPrice;  // pre-select matching tier (update flow)
   final String confirmLabel;   // button text
@@ -54,6 +54,7 @@ class _PriceTiersSheetState extends State<PriceTiersSheet> {
   double get _price  => (widget.tiers[_selected]['price'] as num).toDouble();
   String get _source => widget.tiers[_selected]['customerSpecific'] == true
       ? 'CUSTOMER_PRICE' : 'BATCH_PRICE';
+  String? get _batchPriceId => widget.tiers[_selected]['id'] as String?;
 
   @override
   Widget build(BuildContext context) {
@@ -225,7 +226,7 @@ class _PriceTiersSheetState extends State<PriceTiersSheet> {
                   ? null
                   : () async {
                       setState(() => _adding = true);
-                      await widget.onConfirm(_price, _qty, _source);
+                      await widget.onConfirm(_price, _qty, _source, _batchPriceId);
                       if (mounted) Navigator.of(context).pop();
                     },
               style: ElevatedButton.styleFrom(

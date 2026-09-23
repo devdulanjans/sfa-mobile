@@ -7,6 +7,7 @@ class LocalDb {
   static late Box<Map> invoicesBox;      // cached server invoices (last 90 days)
   static late Box<Map> promotionsBox;    // cached promotions (manager/admin only)
   static late Box<Map> batchPricesBox;   // cached batch prices (manager/admin only)
+  static late Box<Map> reasonsBox;       // admin-managed damage/return reasons
   static late Box<Map> pricingOverridesBox; // customerId -> {productId: price}
   static late Box<Map> syncQueueBox;     // generic pending mutations (non-order)
   static late Box<Map> offlineOrdersBox; // orders saved while offline
@@ -20,6 +21,7 @@ class LocalDb {
     invoicesBox         = await Hive.openBox<Map>('invoices');
     promotionsBox       = await Hive.openBox<Map>('promotions');
     batchPricesBox      = await Hive.openBox<Map>('batch_prices');
+    reasonsBox          = await Hive.openBox<Map>('reasons');
     pricingOverridesBox = await Hive.openBox<Map>('pricing_overrides');
     syncQueueBox        = await Hive.openBox<Map>('sync_queue');
     offlineOrdersBox    = await Hive.openBox<Map>('offline_orders');
@@ -164,6 +166,7 @@ class LocalDb {
     await invoicesBox.clear();
     await promotionsBox.clear();
     await batchPricesBox.clear();
+    await reasonsBox.clear();
     await pricingOverridesBox.clear();
     await syncQueueBox.clear();
     await offlineOrdersBox.clear();
@@ -230,6 +233,28 @@ class LocalDb {
   }
 
   static List<Map> get batchPrices => batchPricesBox.values.toList().cast<Map>();
+
+  // Full replace — admin-added/removed reasons should disappear/appear on the
+  // next sync rather than accumulate stale entries.
+  static Future<void> replaceReasons(List<Map> items) async {
+    await reasonsBox.clear();
+    for (final item in items) {
+      await reasonsBox.put(item['id'] as String, item);
+    }
+  }
+
+  /// Damage/Return reasons for [type] ("DAMAGE" or "RETURN"), ordered the way
+  /// the admin arranged them. Each entry is the raw server map — `label` for
+  /// display, `allowFreeText` for whether picking it should reveal a text field.
+  static List<Map> reasonsFor(String type) {
+    final list = reasonsBox.values
+        .cast<Map>()
+        .where((r) => r['type'] == type)
+        .toList();
+    list.sort((a, b) => ((a['sortOrder'] as num?) ?? 0)
+        .compareTo((b['sortOrder'] as num?) ?? 0));
+    return list;
+  }
 
   // Keyed by customerId; value is {productId: price} for that customer's active overrides.
   static Future<void> setPricingOverrides(String customerId, Map<String, dynamic> priceMap) =>

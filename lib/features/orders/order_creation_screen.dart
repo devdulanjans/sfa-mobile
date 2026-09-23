@@ -533,7 +533,7 @@ class _ProductCardState extends ConsumerState<_ProductCard> {
         productName: name,
         unit: unit,
         tiers: tiers,
-        onConfirm: (price, qty, source) async {
+        onConfirm: (price, qty, source, batchPriceId) async {
           await ref.read(orderCreationProvider.notifier).addLine(
             _productId, name, qty, 0.0,
             unitPrice: price, priceSource: source,
@@ -543,6 +543,7 @@ class _ProductCardState extends ConsumerState<_ProductCard> {
             // Carry through any FREE_PRODUCT promo this product triggers, so
             // picking a tier doesn't lose the free-item registration.
             freeProductData: freeProductData,
+            batchPriceId: batchPriceId,
           );
         },
       ),
@@ -990,9 +991,9 @@ class _CartItemRowState extends ConsumerState<_CartItemRow> {
         initialQty: widget.item.qty,
         initialPrice: widget.item.unitPrice,
         confirmLabel: 'Update Cart',
-        onConfirm: (price, qty, source) async {
+        onConfirm: (price, qty, source, batchPriceId) async {
           ref.read(orderCreationProvider.notifier)
-              .replaceLine(widget.index, price, qty, source);
+              .replaceLine(widget.index, price, qty, source, batchPriceId);
         },
       ),
     );
