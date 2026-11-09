@@ -122,6 +122,9 @@ class _OrderReviewScreenState extends ConsumerState<OrderReviewScreen> {
         'customerId': draft.customerId,
       });
       final tiers = List<Map<String, dynamic>>.from(resp.data as List? ?? []);
+      final promotion = discountPromotion(
+          await fetchPromotionOptions(ref.read(dioProvider), item.productId, draft.customerId),
+          promotionId: item.promotionId);
       if (!mounted) return;
       if (tiers.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -141,11 +144,13 @@ class _OrderReviewScreenState extends ConsumerState<OrderReviewScreen> {
           unit: unit,
           tiers: tiers,
           initialQty: item.qty,
-          initialPrice: item.unitPrice,
+          initialPrice: promotion == null ? (item.basePrice ?? item.unitPrice) : item.unitPrice,
           confirmLabel: 'Update',
+          promotion: promotion,
           onConfirm: (price, qty, source, batchPriceId) async {
             ref.read(orderCreationProvider.notifier)
-                .replaceLine(index, price, qty, source, batchPriceId);
+                .replaceLine(index, price, qty, source, batchPriceId,
+                    promotionListPrice(tiers, batchPriceId, source));
           },
         ),
       );
@@ -395,7 +400,14 @@ class _OrderReviewScreenState extends ConsumerState<OrderReviewScreen> {
                           const SizedBox(height: 10),
                           ...draft.items.map((item) {
                             final isFree = item.priceSource == 'FREE_PRODUCT';
-                            final hasPromo = item.discountPct > 0 || isFree;
+                            // item.discountPct is only a *manual* rep-requested discount —
+                            // a promotion's discount is baked directly into unitPrice, with
+                            // discountPct staying 0, so it must be checked via priceSource,
+                            // not discountPct, or a promotion-priced item silently shows no
+                            // badge at all here (same mistake already fixed on the product
+                            // list and cart-line screens).
+                            final isPromo = item.priceSource == 'PROMOTION';
+                            final hasPromo = isPromo || item.discountPct > 0;
                             return Padding(
                               padding: const EdgeInsets.only(bottom: 10),
                               child: Row(
@@ -422,8 +434,9 @@ class _OrderReviewScreenState extends ConsumerState<OrderReviewScreen> {
                                           ] else if (hasPromo) ...[
                                             const SizedBox(width: 6),
                                             StatusBadge(
-                                                label:
-                                                    '${item.discountPct.toStringAsFixed(0)}% OFF',
+                                                label: isPromo
+                                                    ? 'Promotion'
+                                                    : '${item.discountPct.toStringAsFixed(0)}% OFF',
                                                 tone: AppTone.orange),
                                           ],
                                         ]),
@@ -456,8 +469,7 @@ class _OrderReviewScreenState extends ConsumerState<OrderReviewScreen> {
                       tone: AppTone.violet,
                       padding: const EdgeInsets.all(14),
                       child: Column(children: [
-                        _Total(
-                            draft.discountTotal > 0 ? 'Full Total' : 'Subtotal',
+                        _Total('Subtotal',
                             'LKR ${formatAmount(draft.grossTotal)}', false),
                         if (draft.discountTotal > 0) ...[
                           _Total('Discount',
@@ -802,7 +814,12 @@ class _OrderReviewScreenState extends ConsumerState<OrderReviewScreen> {
           ...draft.items.asMap().entries.map((entry) {
             final index       = entry.key;
             final item        = entry.value;
-            final hasDiscount = item.discountPct > 0;
+            // item.discountPct is only a *manual* rep-requested discount — a promotion's
+            // discount is baked directly into unitPrice, with discountPct staying 0, so it
+            // must be checked via priceSource too, or a promotion-priced item silently
+            // shows no indicator at all here.
+            final isPromo     = item.priceSource == 'PROMOTION';
+            final hasDiscount = item.discountPct > 0 || isPromo;
             final isFree      = item.priceSource == 'FREE_PRODUCT';
             final card = AppCard(
               padding: const EdgeInsets.all(12),
@@ -848,7 +865,10 @@ class _OrderReviewScreenState extends ConsumerState<OrderReviewScreen> {
                           const Icon(Icons.local_offer_outlined,
                               size: 11, color: AppColors.orangeFg),
                           const SizedBox(width: 2),
-                          Text('${item.discountPct.toStringAsFixed(0)}%',
+                          Text(
+                              isPromo
+                                  ? 'Promotion'
+                                  : '${item.discountPct.toStringAsFixed(0)}%',
                               style: const TextStyle(
                                   fontSize: 11, color: AppColors.orangeFg)),
                         ]),
@@ -912,7 +932,7 @@ class _OrderReviewScreenState extends ConsumerState<OrderReviewScreen> {
             tone: AppTone.violet,
             padding: const EdgeInsets.all(14),
             child: Column(children: [
-              _Total(draft.discountTotal > 0 ? 'Full Total' : 'Subtotal',
+              _Total('Subtotal',
                   'LKR ${formatAmount(draft.grossTotal)}', false),
               if (draft.discountTotal > 0) ...[
                 _Total('Discount',

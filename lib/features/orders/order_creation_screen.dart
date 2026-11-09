@@ -14,6 +14,7 @@ import '../../utils/formatters.dart';
 import 'offline_pricing.dart';
 import 'order_provider.dart';
 import 'price_tiers_sheet.dart';
+import 'promotion_picker_sheet.dart';
 
 class OrderCreationScreen extends ConsumerStatefulWidget {
   const OrderCreationScreen({super.key});
@@ -32,6 +33,7 @@ class _OrderCreationScreenState extends ConsumerState<OrderCreationScreen> {
   /// productIds with active batch pricing visible to this customer — loaded
   /// live so it doesn't depend on Full Sync having been run recently.
   Set<String> _batchPricingProductIds = {};
+  Map<String, List<Map<String, dynamic>>> _productPromotions = {};
 
   @override
   void initState() {
@@ -52,8 +54,30 @@ class _OrderCreationScreenState extends ConsumerState<OrderCreationScreen> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _loadCustomerPriceOverrides(draft.customerId);
         _loadBatchPricingProductIds(draft.customerId);
+        _loadProductPromotions(draft.customerId);
       });
     }
+  }
+
+  Future<void> _loadProductPromotions(String customerId) async {
+    Map<String, List<Map<String, dynamic>>> byProduct;
+    try {
+      final resp = await ref.read(dioProvider).get('/pricing/product-promotions',
+          queryParameters: {'customerId': customerId});
+      byProduct = (resp.data as Map).map((k, v) => MapEntry(k.toString(),
+          List<Map<String, dynamic>>.from(v as List)));
+    } catch (e) {
+      debugPrint('[Promotions] Live lookup failed, falling back to cache: $e');
+      byProduct = {
+        for (final p in LocalDb.products)
+          if (hasActivePromotion(p['id'] as String? ?? '', customerId))
+            p['id'] as String: activePromotionsFor(p['id'] as String, customerId)
+                .map((m) => Map<String, dynamic>.from(m))
+                .toList(),
+      };
+    }
+    if (!mounted) return;
+    setState(() => _productPromotions = byProduct);
   }
 
   Future<void> _loadBatchPricingProductIds(String customerId) async {
@@ -178,9 +202,11 @@ class _OrderCreationScreenState extends ConsumerState<OrderCreationScreen> {
       setState(() {
         _customerPriceOverrides = {};
         _batchPricingProductIds = {};
+        _productPromotions = {};
       });
       _loadCustomerPriceOverrides(c['id'] as String);
       _loadBatchPricingProductIds(c['id'] as String);
+      _loadProductPromotions(c['id'] as String);
     }
     setState(() {
       _selectedCustomer = Map<String, dynamic>.from(c);
@@ -328,6 +354,7 @@ class _OrderCreationScreenState extends ConsumerState<OrderCreationScreen> {
                             _customerPriceOverrides[p['id'] as String? ?? ''],
                         hasBatchPricing: _batchPricingProductIds
                             .contains(p['id'] as String? ?? ''),
+                        promotions: _productPromotions[p['id'] as String? ?? ''] ?? const [],
                       ))),
               ],
 
@@ -420,11 +447,14 @@ class _ProductCard extends ConsumerStatefulWidget {
   final double? customerPrice;
   /// Whether this product has any active batch price tier for this customer.
   final bool hasBatchPricing;
+  /// Promotions active on this product for this customer, shown as labels.
+  final List<Map<String, dynamic>> promotions;
   const _ProductCard({
     required this.product,
     required this.customerId,
     this.customerPrice,
     this.hasBatchPricing = false,
+    this.promotions = const [],
   });
 
   @override
@@ -450,6 +480,49 @@ class _ProductCardState extends ConsumerState<_ProductCard> {
 
     debugPrint('[AddFirst] ${widget.product['name']} customerPrice=${widget.customerPrice}');
 
+    // When more than one promotion is active for this product, and the admin-configured
+    // "let sales reps choose" setting is on (the default), the rep must pick one before
+    // anything is resolved/auto-applied — rather than the system silently picking for them.
+    final manualSelection = LocalDb.getSystemSettingBool('promotion_manual_selection', defaultValue: true);
+    final promos = await fetchPromotionOptions(
+        ref.read(dioProvider), _productId, widget.customerId);
+    if (manualSelection && promos.length > 1) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      _showPromotionPicker(promos);
+      return;
+    }
+
+    await _addWithPricing(
+        tierPromotion: discountPromotion(promos), unlockable: unlockablePromotions(promos));
+  }
+
+  void _showPromotionPicker(List<Map<String, dynamic>> promotions) {
+    final name = widget.product['name'] as String? ?? '';
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.xl))),
+      builder: (_) => PromotionPickerSheet(
+        productName: name,
+        promotions: promotions,
+        onConfirm: (promo) {
+          setState(() => _loading = true);
+          final id = promo['id'] as String?;
+          _addWithPricing(
+              promotionId: id,
+              tierPromotion: discountPromotion([promo], promotionId: id),
+              unlockable: unlockablePromotions([promo], promotionId: id));
+        },
+      ),
+    );
+  }
+
+  Future<void> _addWithPricing(
+      {String? promotionId,
+      Map<String, dynamic>? tierPromotion,
+      List<Map<String, dynamic>> unlockable = const []}) async {
     // Resolve full pricing (customer price → promotion → batch price → default;
     // works offline too) so any FREE_PRODUCT promotion is detected regardless of
     // which price source ends up pricing the paid unit — a customer-specific
@@ -462,7 +535,7 @@ class _ProductCardState extends ConsumerState<_ProductCard> {
     // relying on it (or skipping resolution altogether) can hide real tiers
     // that `widget.hasBatchPricing` below already knows exist.
     final result = await resolvePricing(
-        ref.read(dioProvider), _productId, widget.customerId);
+        ref.read(dioProvider), _productId, widget.customerId, promotionId: promotionId);
     final resolvedSource = result['priceSource'] as String? ?? 'DEFAULT_PRICE';
     final freeProductData = result['freeProduct'] as Map<String, dynamic>?;
     debugPrint('[AddFirst] Resolved ${widget.product['name']} → $result');
@@ -472,8 +545,10 @@ class _ProductCardState extends ConsumerState<_ProductCard> {
     // Check tiers whenever ANY batch price (general or customer-specific) is
     // active for this product — not just when resolvedSource says 'BATCH_PRICE',
     // since a customer-specific price can win step 1 even while other qty
-    // tiers also apply. Also check for a FREE_PRODUCT promo trigger, whose
-    // own unit price is unaffected (only the separate free line is discounted).
+    // tiers also apply. Batch pricing comes first: the rep picks a tier and any
+    // discount promotion is then applied on top of that tier's price (the sheet
+    // previews it; the backend applies it when the order is created). Also check
+    // for a FREE_PRODUCT promo trigger, whose own unit price is unaffected.
     final shouldCheckTiers = widget.hasBatchPricing ||
         (resolvedSource == 'PROMOTION' && freeProductData != null);
 
@@ -488,21 +563,28 @@ class _ProductCardState extends ConsumerState<_ProductCard> {
         if (!mounted) return;
 
         if (tiers.isEmpty) {
-          await _addResolved(result);
+          await _addResolved(result,
+              promotionId: promotionId, promotion: tierPromotion, unlockable: unlockable);
           if (mounted) setState(() => _loading = false);
         } else {
           setState(() => _loading = false);
-          _showTierSheet(tiers, freeProductData: freeProductData);
+          _showTierSheet(tiers,
+              freeProductData: freeProductData,
+              promotionId: promotionId,
+              promotion: tierPromotion,
+              unlockable: unlockable);
         }
       } catch (e) {
         if (!mounted) return;
         debugPrint('[AddFirst] Tiers fetch failed: $e');
-        await _addResolved(result);
+        await _addResolved(result,
+            promotionId: promotionId, promotion: tierPromotion, unlockable: unlockable);
         if (mounted) setState(() => _loading = false);
       }
     } else {
       // No batch tiers and no FREE_PRODUCT trigger — add directly, no tier picker.
-      await _addResolved(result);
+      await _addResolved(result,
+          promotionId: promotionId, promotion: tierPromotion, unlockable: unlockable);
       if (mounted) setState(() => _loading = false);
     }
   }
@@ -510,18 +592,37 @@ class _ProductCardState extends ConsumerState<_ProductCard> {
   /// Adds a line from an already-resolved `/pricing/resolve` (or offline) result,
   /// carrying through the resolved tax rate and any FREE_PRODUCT promotion so
   /// both register correctly in the cart.
-  Future<void> _addResolved(Map<String, dynamic> result) async {
+  Future<void> _addResolved(Map<String, dynamic> result,
+      {String? promotionId,
+      Map<String, dynamic>? promotion,
+      List<Map<String, dynamic>> unlockable = const []}) async {
+    // The resolve response only carries the discounted price. Treat the product's default
+    // price as the pre-promotion price only if discounting it reproduces that exact price
+    // (it won't when a batch price was the promotion's base).
+    final unitPrice    = (result['unitPrice'] as num).toDouble();
+    final defaultPrice = (widget.product['defaultPrice'] as num?)?.toDouble();
+    final isFromDefault = result['priceSource'] == 'PROMOTION' &&
+        promotion != null &&
+        defaultPrice != null &&
+        (applyPromotionDiscount(defaultPrice, promotion) - unitPrice).abs() < 0.005;
     await ref.read(orderCreationProvider.notifier).addLine(
       _productId, widget.product['name'] as String, 1.0, 0.0,
       unitPrice:       (result['unitPrice'] as num).toDouble(),
       priceSource:     result['priceSource'] as String?,
       taxPct:          (result['taxPct'] as num?)?.toDouble(),
       freeProductData: result['freeProduct'] as Map<String, dynamic>?,
+      promotionId:     promotionId,
+      listPrice:       isFromDefault ? defaultPrice : null,
+      // A customer price outranks promotions when no tier was picked.
+      unlockable:      result['priceSource'] == 'CUSTOMER_PRICE' ? const [] : unlockable,
     );
   }
 
   void _showTierSheet(List<Map<String, dynamic>> tiers,
-      {Map<String, dynamic>? freeProductData}) {
+      {Map<String, dynamic>? freeProductData,
+      String? promotionId,
+      Map<String, dynamic>? promotion,
+      List<Map<String, dynamic>> unlockable = const []}) {
     final name = widget.product['name'] as String? ?? '';
     final unit = (widget.product['unit'] as Map?)?['name'] as String? ?? '';
     showModalBottomSheet(
@@ -533,6 +634,7 @@ class _ProductCardState extends ConsumerState<_ProductCard> {
         productName: name,
         unit: unit,
         tiers: tiers,
+        promotion: promotion,
         onConfirm: (price, qty, source, batchPriceId) async {
           await ref.read(orderCreationProvider.notifier).addLine(
             _productId, name, qty, 0.0,
@@ -544,6 +646,9 @@ class _ProductCardState extends ConsumerState<_ProductCard> {
             // picking a tier doesn't lose the free-item registration.
             freeProductData: freeProductData,
             batchPriceId: batchPriceId,
+            promotionId: promotionId,
+            listPrice: promotionListPrice(tiers, batchPriceId, source),
+            unlockable: unlockable,
           );
         },
       ),
@@ -652,6 +757,19 @@ class _ProductCardState extends ConsumerState<_ProductCard> {
                       const StatusBadge(label: 'Special', tone: AppTone.mint),
                     ],
                   ]),
+                if (widget.promotions.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Wrap(
+                    spacing: 4,
+                    runSpacing: 4,
+                    children: widget.promotions
+                        .map((p) => StatusBadge(
+                              label: p['name'] as String? ?? 'Promotion',
+                              tone: AppTone.orange,
+                            ))
+                        .toList(),
+                  ),
+                ],
               ],
             ),
           ),
@@ -957,6 +1075,10 @@ class _CartItemRowState extends ConsumerState<_CartItemRow> {
         'customerId': widget.customerId,
       });
       final tiers = List<Map<String, dynamic>>.from(resp.data as List? ?? []);
+      final promotion = discountPromotion(
+          await fetchPromotionOptions(
+              ref.read(dioProvider), widget.item.productId, widget.customerId),
+          promotionId: widget.item.promotionId);
       if (!mounted) return;
       setState(() => _loadingTiers = false);
       if (tiers.isEmpty) {
@@ -964,7 +1086,7 @@ class _CartItemRowState extends ConsumerState<_CartItemRow> {
             const SnackBar(content: Text('No batch price tiers for this product')));
         return;
       }
-      _showTierSheet(tiers);
+      _showTierSheet(tiers, promotion);
     } catch (_) {
       if (!mounted) return;
       setState(() => _loadingTiers = false);
@@ -973,7 +1095,7 @@ class _CartItemRowState extends ConsumerState<_CartItemRow> {
     }
   }
 
-  void _showTierSheet(List<Map<String, dynamic>> tiers) {
+  void _showTierSheet(List<Map<String, dynamic>> tiers, Map<String, dynamic>? promotion) {
     final product = LocalDb.products.firstWhere(
         (p) => p['id'] == widget.item.productId,
         orElse: () => <String, dynamic>{});
@@ -989,11 +1111,13 @@ class _CartItemRowState extends ConsumerState<_CartItemRow> {
         unit: unit,
         tiers: tiers,
         initialQty: widget.item.qty,
-        initialPrice: widget.item.unitPrice,
+        initialPrice: promotion == null ? (widget.item.basePrice ?? widget.item.unitPrice) : widget.item.unitPrice,
         confirmLabel: 'Update Cart',
+        promotion: promotion,
         onConfirm: (price, qty, source, batchPriceId) async {
           ref.read(orderCreationProvider.notifier)
-              .replaceLine(widget.index, price, qty, source, batchPriceId);
+              .replaceLine(widget.index, price, qty, source, batchPriceId,
+                  promotionListPrice(tiers, batchPriceId, source));
         },
       ),
     );
@@ -1037,7 +1161,7 @@ class _CartItemRowState extends ConsumerState<_CartItemRow> {
     final isCustomer = item.priceSource == 'CUSTOMER_PRICE';
     final isBatch    = item.priceSource == 'BATCH_PRICE';
     final isPromo    = item.priceSource == 'PROMOTION';
-    final hasBatchTier = isCustomer || isBatch;
+    final hasBatchTier = isCustomer || isBatch || item.batchPriceId != null;
     final qtyStr = item.qty % 1 == 0
         ? item.qty.toInt().toString()
         : item.qty.toStringAsFixed(1);
@@ -1085,7 +1209,9 @@ class _CartItemRowState extends ConsumerState<_CartItemRow> {
               Row(children: [
                 if (hasBatchTier) ...[
                   StatusBadge(
-                    label: isCustomer ? 'Customer Price' : 'General Price',
+                    label: isPromo
+                        ? 'Batch Price'
+                        : (isCustomer ? 'Customer Price' : 'General Price'),
                     tone: isCustomer ? AppTone.mint : AppTone.sky,
                   ),
                   const SizedBox(width: 8),

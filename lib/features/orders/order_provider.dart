@@ -16,16 +16,61 @@ import 'offline_pricing.dart';
 /// Takes a plain [Dio] (rather than a Riverpod ref) so it works uniformly from
 /// both `WidgetRef` (screens) and `Ref` (notifiers) call sites.
 Future<Map<String, dynamic>> resolvePricing(
-    Dio dio, String productId, String customerId) async {
+    Dio dio, String productId, String customerId,
+    {String? promotionId, bool ignorePromotions = false}) async {
   try {
     final resp = await dio.get('/pricing/resolve', queryParameters: {
       'productId': productId,
       'customerId': customerId,
+      if (promotionId != null) 'promotionId': promotionId,
+      if (ignorePromotions) 'ignorePromotions': true,
     });
     return Map<String, dynamic>.from(resp.data as Map);
   } catch (_) {
-    return resolvePriceOffline(productId, customerId);
+    return resolvePriceOffline(productId, customerId,
+        promotionId: promotionId, ignorePromotions: ignorePromotions);
   }
+}
+
+/// Promotions active for a product+customer, live when reachable, else from the
+/// synced cache.
+Future<List<Map<String, dynamic>>> fetchPromotionOptions(
+    Dio dio, String productId, String customerId) async {
+  try {
+    final resp = await dio.get('/pricing/promotions', queryParameters: {
+      'productId': productId,
+      'customerId': customerId,
+    });
+    return List<Map<String, dynamic>>.from(resp.data as List? ?? []);
+  } catch (e) {
+    return activePromotionsFor(productId, customerId)
+        .map((p) => Map<String, dynamic>.from(p))
+        .toList();
+  }
+}
+
+/// The discount promotion that applies on top of a batch tier: the rep's explicit
+/// pick if there is one, otherwise the first discount-type promotion. Mirrors the
+/// backend's `PricingEngine.applyPromotionToSelectedTier`.
+Map<String, dynamic>? discountPromotion(List<Map<String, dynamic>> options,
+    {String? promotionId}) {
+  final chosen = options.where((p) => p['id'] == promotionId).firstOrNull;
+  if (chosen != null) {
+    return chosen['type'] == 'FREE_PRODUCT' || _unlockQty(chosen) > 1 ? null : chosen;
+  }
+  return options.where((p) => p['type'] != 'FREE_PRODUCT' && _unlockQty(p) <= 1).firstOrNull;
+}
+
+int _unlockQty(Map promotion) => (promotion['minOrderQty'] as num?)?.toInt() ?? 1;
+
+/// Discount promotions the cart must switch on and off as quantities change — empty
+/// unless at least one of them has an unlock quantity above 1.
+List<Map<String, dynamic>> unlockablePromotions(List<Map<String, dynamic>> options,
+    {String? promotionId}) {
+  final chosen = options.where((p) => p['id'] == promotionId).firstOrNull;
+  final discounts =
+      (chosen != null ? [chosen] : options).where((p) => p['type'] != 'FREE_PRODUCT').toList();
+  return discounts.any((p) => _unlockQty(p) > 1) ? discounts : const [];
 }
 
 // ---------- Free-product promotion snapshot ----------
@@ -37,6 +82,8 @@ class _FreePromo {
   final String freeProductName;
   final double maxFreeCount;
   final int    minOrderQty;
+  final int?   repeatEveryQty;  // null = rewarded once
+  final int?   maxFreeTotal;    // null = no limit
   final List<String> triggerProductIds; // products that count toward the threshold
 
   const _FreePromo({
@@ -45,6 +92,8 @@ class _FreePromo {
     required this.maxFreeCount,
     required this.minOrderQty,
     required this.triggerProductIds,
+    this.repeatEveryQty,
+    this.maxFreeTotal,
   });
 }
 
@@ -84,8 +133,9 @@ class OrderDraft {
   double get grandTotal    => subtotal + taxTotal;
   // grossTotal/discountTotal = pre-discount total and the value discounted away
   // (e.g. a promotion's free item priced at its real value with a 100% discount).
-  double get grossTotal    => items.fold(0, (s, i) => s + i.unitPrice * i.qty);
-  double get discountTotal => items.fold(0, (s, i) => s + i.discountAmount);
+  double get grossTotal    => items.fold(0, (s, i) => s + (i.listPrice ?? i.unitPrice) * i.qty);
+  double get discountTotal => items.fold(
+      0, (s, i) => s + i.discountAmount + ((i.listPrice ?? i.unitPrice) - i.unitPrice) * i.qty);
 }
 
 class OrderLineItem {
@@ -104,12 +154,26 @@ class OrderLineItem {
   // re-resolving "the best" batch price, which is ambiguous when several tiers are equally
   // specific (see PricingEngine.resolve on the backend).
   final String? batchPriceId;
+  // The specific Promotion this line's price/free-item eligibility came from, when the rep
+  // explicitly picked one via the promotion picker (more than one was active) — sent to the
+  // backend so it honors exactly that choice, excluding the other promotion, instead of
+  // auto-picking (see PricingEngine.resolve's promotionId javadoc on the backend).
+  final String? promotionId;
+  // Unit price before a promotion, when one lowered [unitPrice] — a promotion is baked into
+  // the unit price with discountPct staying 0, so this is what lets the totals show its value.
+  final double? listPrice;
+  // Set only for lines whose discount depends on an unlock quantity: the promotions to
+  // try, and the price/source to fall back to while none of them is unlocked.
+  final List<Map<String, dynamic>> unlockable;
+  final double? basePrice;
+  final String? baseSource;
 
   const OrderLineItem({
     required this.productId, required this.productName, required this.qty,
     required this.unitPrice, required this.discountPct, required this.taxPct,
     required this.discountAmount, required this.taxAmount, required this.lineTotal,
-    required this.priceSource, this.batchPriceId,
+    required this.priceSource, this.batchPriceId, this.promotionId, this.listPrice,
+    this.unlockable = const [], this.basePrice, this.baseSource,
   });
 }
 
@@ -194,6 +258,9 @@ class OrderCreationNotifier extends Notifier<OrderDraft?> {
     double? taxPct,          // supplied when caller already resolved the tax rate
     Map<String, dynamic>? freeProductData, // supplied when caller already resolved pricing
     String? batchPriceId,    // id of the specific tier picked, when unitPrice came from one
+    String? promotionId,     // id of the specific promotion picked, when more than one applied
+    double? listPrice,       // unit price before a promotion, when one lowered unitPrice
+    List<Map<String, dynamic>> unlockable = const [], // see OrderLineItem.unlockable
   }) async {
     if (state == null) return;
 
@@ -204,7 +271,7 @@ class OrderCreationNotifier extends Notifier<OrderDraft?> {
     if (unitPrice == null) {
       // Resolve price live, falling back to the offline cache when unreachable.
       final result = await resolvePricing(
-          ref.read(dioProvider), productId, state!.customerId);
+          ref.read(dioProvider), productId, state!.customerId, promotionId: promotionId);
       resolvedPrice   = (result['unitPrice'] as num).toDouble();
       resolvedSource  = result['priceSource'] as String? ?? 'DEFAULT_PRICE';
       resolvedTaxPct  = (result['taxPct']    as num?)?.toDouble() ?? 0.0;
@@ -220,14 +287,31 @@ class OrderCreationNotifier extends Notifier<OrderDraft?> {
     final taxAmount      = afterDiscount * resolvedTaxPct / 100;
     final lineTotal      = afterDiscount + taxAmount;
 
+    double? basePrice;
+    String? baseSource;
+    if (unlockable.isNotEmpty) {
+      if (batchPriceId != null) {
+        basePrice  = listPrice ?? unitPrice0;
+        baseSource = priceSource0 == 'PROMOTION' ? 'BATCH_PRICE' : priceSource0;
+      } else {
+        final regular = await resolvePricing(
+            ref.read(dioProvider), productId, state!.customerId, ignorePromotions: true);
+        basePrice  = (regular['unitPrice'] as num).toDouble();
+        baseSource = regular['priceSource'] as String?;
+      }
+    }
+
     final newLine = OrderLineItem(
       productId: productId, productName: productName, qty: qty,
       unitPrice: unitPrice0, discountPct: discountPct, taxPct: resolvedTaxPct,
       discountAmount: discountAmount, taxAmount: taxAmount, lineTotal: lineTotal,
-      priceSource: priceSource0, batchPriceId: batchPriceId,
+      priceSource: priceSource0, batchPriceId: batchPriceId, promotionId: promotionId,
+      listPrice: listPrice,
+      unlockable: unlockable, basePrice: basePrice, baseSource: baseSource,
     );
 
     state = state!.copyWith(items: [...state!.items, newLine]);
+    _applyUnlockablePromotions();
 
     // Register free-product promotion and re-evaluate threshold
     if (freeProductData != null) {
@@ -235,6 +319,8 @@ class OrderCreationNotifier extends Notifier<OrderDraft?> {
       final fpName    = freeProductData['name']         as String;
       final maxFree   = (freeProductData['maxFreeCount'] as num?)?.toDouble() ?? 1.0;
       final minOrdQty = (freeProductData['minOrderQty']  as num?)?.toInt()    ?? 1;
+      final repeatEvery = (freeProductData['repeatEveryQty'] as num?)?.toInt();
+      final maxTotal  = (freeProductData['maxFreeTotal'] as num?)?.toInt();
       final rawIds    = freeProductData['applicableProductIds'] as List<dynamic>? ?? [];
       final triggerIds = rawIds.map((e) => e.toString()).toList();
 
@@ -244,6 +330,8 @@ class OrderCreationNotifier extends Notifier<OrderDraft?> {
         maxFreeCount:     maxFree,
         minOrderQty:      minOrdQty,
         triggerProductIds: triggerIds,
+        repeatEveryQty:   repeatEvery,
+        maxFreeTotal:     maxTotal,
       );
 
       final updatedPromos = Map<String, _FreePromo>.from(state!.activePromos)
@@ -254,12 +342,51 @@ class OrderCreationNotifier extends Notifier<OrderDraft?> {
     }
   }
 
+  /// Switches each unlock-gated discount on or off from current cart quantities, counted
+  /// across all of a promotion's products. Mirrors PricingEngine.eligiblePromotions.
+  void _applyUnlockablePromotions() {
+    if (state == null || state!.items.every((i) => i.unlockable.isEmpty)) return;
+    final paid = state!.items.where((i) => i.priceSource != 'FREE_PRODUCT').toList();
+
+    state = state!.copyWith(
+      items: state!.items.map((i) {
+        final base = i.basePrice;
+        if (i.unlockable.isEmpty || base == null) return i;
+        final promo = i.unlockable.where((p) {
+          final ids = promotionProductIds(p);
+          final total = paid
+              .where((l) => ids.contains(l.productId))
+              .fold<double>(0, (s, l) => s + l.qty);
+          return total >= _unlockQty(p);
+        }).firstOrNull;
+
+        final unitPrice      = applyPromotionDiscount(base, promo);
+        final gross          = unitPrice * i.qty;
+        final discountAmount = gross * i.discountPct / 100;
+        final afterDiscount  = gross - discountAmount;
+        final taxAmount      = afterDiscount * i.taxPct / 100;
+        return OrderLineItem(
+          productId: i.productId, productName: i.productName,
+          qty: i.qty, unitPrice: unitPrice,
+          discountPct: i.discountPct, taxPct: i.taxPct,
+          discountAmount: discountAmount, taxAmount: taxAmount,
+          lineTotal: afterDiscount + taxAmount,
+          priceSource: promo != null ? 'PROMOTION' : (i.baseSource ?? 'DEFAULT_PRICE'),
+          batchPriceId: i.batchPriceId, promotionId: i.promotionId,
+          listPrice: promo != null ? base : null,
+          unlockable: i.unlockable, basePrice: base, baseSource: i.baseSource,
+        );
+      }).toList(),
+    );
+  }
+
   /// Re-evaluates every known free-product promotion against current cart qty.
   /// Adds the free line when the threshold is met; removes it when it is not.
   /// The free line always carries the product's real price/qty (and a 100%
   /// discount so it still nets to zero in the running total) so the rep can
   /// see what the free item is actually worth — never a bare "0.00" row.
   Future<void> _syncFreeProducts() async {
+    _applyUnlockablePromotions();
     if (state == null || state!.activePromos.isEmpty) return;
 
     // Keep all non-free lines as the authoritative base
@@ -277,12 +404,29 @@ class OrderCreationNotifier extends Notifier<OrderDraft?> {
 
       if (totalQty >= promo.minOrderQty) {
         final result = await resolvePricing(
-            ref.read(dioProvider), promo.freeProductId, state!.customerId);
-        final unitPrice = (result['unitPrice'] as num?)?.toDouble() ?? 0.0;
+            ref.read(dioProvider), promo.freeProductId, state!.customerId,
+            ignorePromotions: true); // a free item shows its real, undiscounted value
+        // A free item that is also being bought at a picked batch tier is valued at that
+        // tier's price; otherwise at its regular price. Mirrors PricingEngine.resolveFreeItems.
+        final paidLine = baseItems
+            .where((i) => i.productId == promo.freeProductId && i.batchPriceId != null)
+            .firstOrNull;
+        final unitPrice = paidLine != null
+            ? (paidLine.listPrice ?? paidLine.unitPrice)
+            : (result['unitPrice'] as num?)?.toDouble() ?? 0.0;
         final taxPct    = (result['taxPct']    as num?)?.toDouble() ?? 0.0;
         const discountPct = 100.0;
 
-        final gross          = unitPrice * promo.maxFreeCount;
+        // Counted from the first unit once unlocked. Mirrors PricingEngine.freeQuantity.
+        final repeat = promo.repeatEveryQty;
+        var freeQty = repeat == null || repeat < 1
+            ? promo.maxFreeCount
+            : promo.maxFreeCount * (totalQty / repeat).floorToDouble();
+        final cap = promo.maxFreeTotal;
+        if (cap != null && freeQty > cap) freeQty = cap.toDouble();
+        if (freeQty <= 0) continue;
+
+        final gross          = unitPrice * freeQty;
         final discountAmount = gross * discountPct / 100;
         final afterDiscount  = gross - discountAmount;
         final taxAmount      = afterDiscount * taxPct / 100;
@@ -290,7 +434,7 @@ class OrderCreationNotifier extends Notifier<OrderDraft?> {
         freeLines.add(OrderLineItem(
           productId:      promo.freeProductId,
           productName:    promo.freeProductName,
-          qty:            promo.maxFreeCount,
+          qty:            freeQty,
           unitPrice:      unitPrice,
           discountPct:    discountPct,
           taxPct:         taxPct,
@@ -308,7 +452,7 @@ class OrderCreationNotifier extends Notifier<OrderDraft?> {
   void clearOrder() => state = null;
 
   void replaceLine(int index, double newUnitPrice, double newQty, String newSource,
-      [String? newBatchPriceId]) {
+      [String? newBatchPriceId, double? newListPrice]) {
     if (state == null) return;
     final items = [...state!.items];
     if (index < 0 || index >= items.length) return;
@@ -323,9 +467,16 @@ class OrderCreationNotifier extends Notifier<OrderDraft?> {
       discountPct: old.discountPct, taxPct: old.taxPct,
       discountAmount: discountAmount, taxAmount: taxAmount,
       lineTotal: afterDiscount + taxAmount, priceSource: newSource,
-      batchPriceId: newBatchPriceId,
+      batchPriceId: newBatchPriceId, promotionId: old.promotionId,
+      listPrice: newListPrice,
+      unlockable: old.unlockable,
+      basePrice: old.unlockable.isEmpty ? null : (newListPrice ?? newUnitPrice),
+      baseSource: old.unlockable.isEmpty
+          ? null
+          : (newSource == 'PROMOTION' ? 'BATCH_PRICE' : newSource),
     );
     state = state!.copyWith(items: items);
+    _syncFreeProducts(); // a tier change can change the free item's value
   }
 
   void removeLine(int index) {
@@ -360,7 +511,9 @@ class OrderCreationNotifier extends Notifier<OrderDraft?> {
           discountPct: i.discountPct, taxPct: i.taxPct,
           discountAmount: discountAmount, taxAmount: taxAmount,
           lineTotal: afterDiscount + taxAmount, priceSource: i.priceSource,
-          batchPriceId: i.batchPriceId,
+          batchPriceId: i.batchPriceId, promotionId: i.promotionId,
+          listPrice: i.listPrice,
+          unlockable: i.unlockable, basePrice: i.basePrice, baseSource: i.baseSource,
         );
       }).toList(),
     );
@@ -414,6 +567,7 @@ class OrderCreationNotifier extends Notifier<OrderDraft?> {
                 'quantity': i.qty,
                 'discountPct': i.discountPct,
                 if (i.batchPriceId != null) 'batchPriceId': i.batchPriceId,
+                if (i.promotionId != null) 'promotionId': i.promotionId,
               }).toList(),
     };
 

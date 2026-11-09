@@ -1,5 +1,15 @@
 import 'package:flutter/material.dart';
 import '../../utils/formatters.dart';
+import 'offline_pricing.dart';
+
+/// Raw price of the picked tier when a promotion discounted it (null otherwise),
+/// so the order totals can show the promotion's value as a discount.
+double? promotionListPrice(
+    List<Map<String, dynamic>> tiers, String? batchPriceId, String source) {
+  if (source != 'PROMOTION') return null;
+  final tier = tiers.where((t) => t['id'] == batchPriceId).firstOrNull;
+  return (tier?['price'] as num?)?.toDouble();
+}
 
 /// Shared batch-price tier picker bottom sheet — used both when first adding a
 /// product to the cart and when changing an existing cart/review line's tier.
@@ -11,6 +21,7 @@ class PriceTiersSheet extends StatefulWidget {
   final double? initialQty;    // pre-fill qty (update flow)
   final double? initialPrice;  // pre-select matching tier (update flow)
   final String confirmLabel;   // button text
+  final Map<String, dynamic>? promotion; // discount applied on top of the chosen tier
 
   const PriceTiersSheet({
     super.key,
@@ -21,6 +32,7 @@ class PriceTiersSheet extends StatefulWidget {
     this.initialQty,
     this.initialPrice,
     this.confirmLabel = 'Add to Cart',
+    this.promotion,
   });
 
   @override
@@ -38,7 +50,7 @@ class _PriceTiersSheetState extends State<PriceTiersSheet> {
     // Pre-select the tier whose price matches the current cart item price
     if (widget.initialPrice != null) {
       final match = widget.tiers.indexWhere(
-          (t) => (t['price'] as num).toDouble() == widget.initialPrice);
+          (t) => _effectivePrice(t) == widget.initialPrice);
       if (match >= 0) _selected = match;
     }
     _qty = widget.initialQty ?? _minQtyOf(_selected);
@@ -51,9 +63,15 @@ class _PriceTiersSheetState extends State<PriceTiersSheet> {
     return d > 0 ? d : 1;
   }
 
-  double get _price  => (widget.tiers[_selected]['price'] as num).toDouble();
-  String get _source => widget.tiers[_selected]['customerSpecific'] == true
-      ? 'CUSTOMER_PRICE' : 'BATCH_PRICE';
+  double _effectivePrice(Map<String, dynamic> tier) =>
+      applyPromotionDiscount((tier['price'] as num).toDouble(), widget.promotion);
+
+  double get _price  => _effectivePrice(widget.tiers[_selected]);
+  String get _source {
+    if (widget.promotion != null) return 'PROMOTION';
+    return widget.tiers[_selected]['customerSpecific'] == true
+        ? 'CUSTOMER_PRICE' : 'BATCH_PRICE';
+  }
   String? get _batchPriceId => widget.tiers[_selected]['id'] as String?;
 
   @override
@@ -86,6 +104,14 @@ class _PriceTiersSheetState extends State<PriceTiersSheet> {
               const SizedBox(height: 2),
               const Text('Select a price tier',
                   style: TextStyle(fontSize: 13, color: Colors.grey)),
+              if (widget.promotion != null) ...[
+                const SizedBox(height: 4),
+                Text('Promotion applied: ${widget.promotion!['name']}',
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.orange.shade800)),
+              ],
             ]),
           ),
 
@@ -96,7 +122,8 @@ class _PriceTiersSheetState extends State<PriceTiersSheet> {
             final i    = e.key;
             final tier = e.value;
             final sel  = i == _selected;
-            final price = (tier['price'] as num).toDouble();
+            final rawPrice = (tier['price'] as num).toDouble();
+            final price = _effectivePrice(tier);
             final minQtyRaw = tier['minQty'];
             final minQty = minQtyRaw != null ? (minQtyRaw as num).toDouble() : null;
             final isCustomer = tier['customerSpecific'] == true;
@@ -159,6 +186,12 @@ class _PriceTiersSheetState extends State<PriceTiersSheet> {
                     ]),
                   ),
                   Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                    if (price != rawPrice)
+                      Text('LKR ${formatAmount(rawPrice)}',
+                          style: TextStyle(
+                              fontSize: 11,
+                              color: Colors.grey.shade500,
+                              decoration: TextDecoration.lineThrough)),
                     Text('LKR ${formatAmount(price)}',
                         style: TextStyle(
                             fontWeight: FontWeight.bold,
